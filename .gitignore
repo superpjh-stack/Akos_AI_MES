@@ -1,0 +1,41 @@
+# Next.js
+akos-mes/frontend-next/.next/
+akos-mes/frontend-next/node_modules/
+akos-mes/frontend-next/out/
+akos-mes/frontend-next/.env*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude / bkit internal
+.bkit/
+.omc/
+.claude/
+
+# Nested git repos (managed separately)
+claude-usage/

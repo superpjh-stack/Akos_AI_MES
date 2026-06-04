@@ -1,0 +1,188 @@
+version: "3.9"
+
+services:
+
+  # ── Databases ─────────────────────────────────────────────────────────────────
+
+  db:
+    image: postgres:16
+    container_name: akos_mes_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: akos
+      POSTGRES_PASSWORD: akos1234
+      POSTGRES_DB: akos_mes
+    ports:
+      - "5434:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - akos_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akos -d akos_mes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  vectordb:
+    image: pgvector/pgvector:pg16
+    container_name: akos_vector_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: akos
+      POSTGRES_PASSWORD: akos1234
+      POSTGRES_DB: akos_vector
+    ports:
+      - "5435:5432"
+    volumes:
+      - vector_data:/var/lib/postgresql/data
+      - ./infra/vector_init.sql:/docker-entrypoint-initdb.d/vector_init.sql
+    networks:
+      - akos_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akos -d akos_vector"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: akos_redis
+    restart: unless-stopped
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - akos_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Application Services ──────────────────────────────────────────────────────
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: akos_backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      VECTOR_DB_URL: ${VECTOR_DB_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - akos_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ai:
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    container_name: akos_ai
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      VECTOR_DB_URL: ${VECTOR_DB_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      REDIS_URL: redis://redis:6379/1
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8503:8502"
+    volumes:
+      - ./ai:/app
+      - model_artifacts:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - akos_network
+    command: uvicorn main:app --host 0.0.0.0 --port 8502 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: akos_frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+      AI_URL: http://ai:8502
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - akos_network
+    command: >
+      streamlit run app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
+
+  frontend-next:
+    build:
+      context: ./frontend-next
+      dockerfile: Dockerfile
+    container_name: akos_frontend_next
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8001
+      BACKEND_INTERNAL_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend-next:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - akos_network
+
+# ── Networks ───────────────────────────────────────────────────────────────────
+
+networks:
+  akos_network:
+    driver: bridge
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+
+volumes:
+  db_data:
+  vector_data:
+  redis_data:
+  model_artifacts:
